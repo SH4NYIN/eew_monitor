@@ -1,0 +1,2 @@
+websockets==15.0.1
+win11toast==0.36.3
