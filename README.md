@@ -21,3 +21,10 @@ This is an [EEW](https://en.wikipedia.org/wiki/Earthquake_Early_Warning_(Japan))
 - packages
   - `websockets==15.0.1`
   - `win11toast==0.36.3`
+
+## To Run
+
+```
+python eew_alert.py
+```
+
