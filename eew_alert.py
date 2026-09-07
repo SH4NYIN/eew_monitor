@@ -123,6 +123,43 @@ def format_intensity(value):
     return intensity
 
 
+def format_depth(value):
+    """Format hypocenter depth in kilometres."""
+    if value is None:
+        return "? km"
+
+    if isinstance(value, bool):
+        return "? km"
+
+    try:
+        depth = float(value)
+    except (TypeError, ValueError):
+        depth_text = str(value).strip()
+        if not depth_text or depth_text.lower() in {"unknown", "none", "null"}:
+            return "? km"
+        if depth_text.lower().endswith("km"):
+            return depth_text
+        return f"{depth_text} km"
+
+    if depth.is_integer():
+        depth_text = str(int(depth))
+    else:
+        depth_text = f"{depth:g}"
+
+    return f"{depth_text} km"
+
+
+def format_report_type(message):
+    """Format the report serial and final-report state."""
+    serial = get_serial(message)
+    is_final = message.get("isFinal") is True
+
+    if is_final:
+        return "Final"
+
+    return f"Rep {serial}" if serial is not None else "Rep ?"
+
+
 def sanitize_filename_part(value, fallback):
     """Replace characters that aren't permitted in Windows filenames."""
     text = str(value).strip() if value is not None else ""
@@ -132,11 +169,12 @@ def sanitize_filename_part(value, fallback):
     return text[:60] or fallback
 
 
-def build_eew_summary(message):
+def build_eew_summary(message, include_report_type=True):
     """Build a compact summary from the important EEW fields."""
     hypocenter = str(message.get("Hypocenter") or "Unknown hypocenter").strip()
     magnitude = format_magnitude(message.get("Magunitude"))
     intensity = format_intensity(message.get("MaxIntensity"))
+    depth = format_depth(message.get("Depth"))
 
     origin_time = parse_origin_time(message.get("OriginTime"))
     if origin_time is None:
@@ -146,21 +184,30 @@ def build_eew_summary(message):
     else:
         origin_text = origin_time.strftime("%Y-%m-%d %H:%M")
 
-    status = "CANCELLED | " if message.get("isCancel") is True else ""
-    return (
-        f"{status} | {hypocenter} | {origin_text} | "
-        f"M{magnitude} ({intensity}) | JMA"
-    )
+    status = "[CANCELLED] " if message.get("isCancel") is True else ""
+    summary_parts = [
+        f"{status}{hypocenter}",
+        f"M{magnitude} ({intensity})",
+        depth,
+        origin_text,
+    ]
+
+    if include_report_type:
+        summary_parts.append(format_report_type(message))
+
+    summary_parts.append("JMA")
+    return " | ".join(summary_parts)
 
 
 def show_eew_notification(message):
     """Show a non-blocking Windows toast for an accepted EEW report."""
     title = str(message.get("Title") or "EEW").strip()
-    notification_title = (
-        f"EEW CANCELLED | {title}"
+    title_prefix = (
+        "EEW Cancelled"
         if message.get("isCancel") is True
-        else f"EEW ALERT | {title}"
+        else "EEW Alert"
     )
+    notification_title = f"{title_prefix}「{title}」"
 
     try:
         notify(
@@ -171,17 +218,34 @@ def show_eew_notification(message):
         LOGGER.exception("Unable to display the Windows toast notification.")
 
 
+def get_storage_time(message):
+    """Use earthquake origin time for storage, falling back to current time."""
+    if isinstance(message, dict):
+        origin_time = parse_origin_time(message.get("OriginTime"))
+        if origin_time is not None:
+            return origin_time
+
+    return datetime.now()
+
+
+def build_json_directory(message):
+    """Build json/year/month/day from the earthquake origin time."""
+    storage_time = get_storage_time(message)
+    return (
+        JSON_DIR
+        / storage_time.strftime("%Y")
+        / storage_time.strftime("%m")
+        / storage_time.strftime("%d")
+    )
+
+
 def build_json_filename(message):
     """Build a filename from origin time, hypocenter, magnitude, and intensity."""
     if not isinstance(message, dict):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = get_storage_time(message).strftime("%Y%m%d_%H%M%S")
         return f"{timestamp}_JSON.json"
 
-    origin_time = parse_origin_time(message.get("OriginTime"))
-    if origin_time is None:
-        origin_time = datetime.now()
-
-    time_part = origin_time.strftime("%Y%m%d_%H%M")
+    time_part = get_storage_time(message).strftime("%Y%m%d_%H%M")
     hypocenter = sanitize_filename_part(
         message.get("Hypocenter"),
         "Unknown",
@@ -291,7 +355,7 @@ def find_event_file(event_id):
     if known_path is not None and known_path.exists():
         return known_path
 
-    for file_path in JSON_DIR.glob("*.json"):
+    for file_path in JSON_DIR.rglob("*.json"):
         # Only inspect generated files; leave test.json and other samples alone.
         if re.match(r"^\d{8}_\d{4,6}_", file_path.name) is None:
             continue
@@ -328,7 +392,11 @@ def save_json_message(message):
     save_status = "created"
 
     if output_path is None:
-        desired_path = JSON_DIR / build_json_filename(message)
+        desired_path = (
+            build_json_directory(message)
+            / build_json_filename(message)
+        )
+        desired_path.parent.mkdir(parents=True, exist_ok=True)
         output_path = make_unique_path(desired_path)
         file_mode = "x"
     else:
@@ -361,11 +429,12 @@ def save_json_message(message):
         file.write("\n")
 
     latest_path = make_unique_path(
-        JSON_DIR / build_json_filename(message),
+        build_json_directory(message) / build_json_filename(message),
         current_path=output_path,
     )
 
     if latest_path != output_path:
+        latest_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.rename(latest_path)
         output_path = latest_path
 
@@ -463,7 +532,17 @@ async def receive_messages(websocket_url):
 
                 if isinstance(parsed_message, dict):
                     summary = build_eew_summary(parsed_message)
-                    report(summary)
+
+                    if parsed_message.get("isFinal") is True:
+                        report(
+                            build_eew_summary(
+                                parsed_message,
+                                include_report_type=False,
+                            )
+                        )
+                    else:
+                        LOGGER.info(summary)
+
                     show_eew_notification(parsed_message)
                 else:
                     report(
@@ -521,3 +600,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         report("Terminated.")
+
