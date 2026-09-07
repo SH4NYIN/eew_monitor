@@ -219,7 +219,7 @@ __marimo__/
 
 
 # mannually added for this proj
-./json/
-./logs/
+json/*
+logs/*
 .runtime/receiver.lock
 .runtime/endpoint.json

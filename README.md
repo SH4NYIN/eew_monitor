@@ -69,3 +69,16 @@ Colors reflect the maximum intensity (Shindo, based on JMA's system) and I refer
 ### Threshold
 
 Earthquake with maximum intensity `>= 4` or magnitude `>= 5.0` would be alerted with a desktop notification, regardless final or not.
+
+
+
+## Todo
+
+- [x] Main program 
+  - [x] Base Functions: Websocket receiver + Data process + Pop-up alert
+  - [x] Refactoring: TUI (interactive event list) + background receiver service
+  - [x] Color schemes & int. thresholds, will be adjusted as well
+- [ ] Data:
+  - [x] 1st phase: JMA (Japan)
+  - [ ] 2nd phase: CENC (China), etc.
+- [ ] Maybe future: Icon, sound, ASCII diagram in TUI, etc.
