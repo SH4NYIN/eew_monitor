@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import json
 import logging
@@ -8,8 +9,12 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from win11toast import notify
 from websockets.asyncio.client import connect
+from websockets.exceptions import WebSocketException
+
+from eew_display import ConnectionStatus, ConsoleDisplay
+from eew_intensity import meets_notification_threshold
+from eew_notifications import NotificationQueue, notify
 
 
 HEARTBEAT_TIMEOUT = 3 * 60
@@ -28,11 +33,14 @@ JSON_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 EVENT_FILES = {}
 
-LOGGER = logging.getLogger("eew_test")
+LOGGER = logging.getLogger("eew")
 LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
 
-if not LOGGER.handlers:
+def initialize_logging():
+    """Called by the singleton receiver only; viewers must not hold log files."""
+    if any(isinstance(handler, RotatingFileHandler) for handler in LOGGER.handlers):
+        return
     log_handler = RotatingFileHandler(
         LOG_DIR / "eew.log",
         maxBytes=2 * 1024 * 1024,
@@ -48,12 +56,10 @@ if not LOGGER.handlers:
     LOGGER.addHandler(log_handler)
 
 
-def report(message, level=logging.INFO):
-    """Write a message to the rotating log and to the console when available."""
+def report(message, level=logging.INFO, display=None):
+    """Write durable messages to the log and the selected presentation."""
     LOGGER.log(level, message)
-
-    if sys.stdout is not None:
-        print(message)
+    (display or ConsoleDisplay()).message(message, level)
 
 
 def is_heartbeat(message):
@@ -200,7 +206,10 @@ def build_eew_summary(message, include_report_type=True):
 
 
 def show_eew_notification(message):
-    """Show a non-blocking Windows toast for an accepted EEW report."""
+    """Submit a qualifying report to the desktop, returning a nonfatal error if any."""
+    if not meets_notification_threshold(message):
+        return ""
+
     title = str(message.get("Title") or "EEW").strip()
     title_prefix = (
         "EEW Cancelled"
@@ -214,8 +223,21 @@ def show_eew_notification(message):
             notification_title,
             build_eew_summary(message),
         )
-    except Exception:
-        LOGGER.exception("Unable to display the Windows toast notification.")
+    except Exception as error:
+        return " ".join(f"{type(error).__name__}: {error}".split())[:300]
+    return ""
+
+
+def update_notification_status(warning, display, status):
+    """Publish and log notification outage/recovery transitions, not every failure."""
+    if warning == status.notification_warning:
+        return
+    status.notification_warning = warning
+    if warning:
+        LOGGER.warning("Desktop notifications unavailable: %s", warning)
+    else:
+        LOGGER.info("Desktop notification submission restored.")
+    display.status(status)
 
 
 def get_storage_time(message):
@@ -290,7 +312,7 @@ def read_saved_messages(file_path):
     """Read single-object JSON, JSON Lines, or concatenated JSON objects."""
     try:
         content = file_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
         return []
 
     messages = []
@@ -444,9 +466,42 @@ def save_json_message(message):
     return output_path, save_status
 
 
-async def receive_messages(websocket_url):
+def load_recent_history(limit=100):
+    """Load the latest revision of recent saved events without sending toasts."""
+    files = sorted(
+        (
+            path for path in JSON_DIR.rglob("*.json")
+            if re.match(r"^\d{8}_\d{4,6}_", path.name)
+        ),
+        key=lambda path: (path.name, str(path)),
+        reverse=True,
+    )
+    history = []
+    for path in files:
+        message = get_latest_saved_message(path)
+        if message is None or message.get("isTraining") is True:
+            continue
+        history.append((build_eew_summary(message), message))
+        if len(history) >= limit:
+            break
+    return list(reversed(history))
+
+
+class HeartbeatTimeout(TimeoutError):
+    """The server stopped sending application-level heartbeats."""
+
+
+async def receive_messages(websocket_url, display=None, status=None, notifications=None):
+    display = display or ConsoleDisplay()
+    status = status or ConnectionStatus()
     async with connect(websocket_url) as websocket:
-        report("Connected to server. Waiting for messages...")
+        LOGGER.info("Connected to server. Waiting for messages...")
+        status.phase = "connected"
+        status.detail = ""
+        status.retry_at = 0
+        status.connected_at = time.monotonic()
+        status.last_heartbeat = None
+        display.status(status)
 
         last_heartbeat = time.monotonic()
 
@@ -458,7 +513,7 @@ async def receive_messages(websocket_url):
             )
 
             if remaining_time <= 0:
-                raise RuntimeError(
+                raise HeartbeatTimeout(
                     f"No heartbeat received for {HEARTBEAT_TIMEOUT} seconds."
                 )
 
@@ -467,8 +522,8 @@ async def receive_messages(websocket_url):
                     websocket.recv(),
                     timeout=remaining_time,
                 )
-            except TimeoutError as error:
-                raise RuntimeError(
+            except asyncio.TimeoutError as error:
+                raise HeartbeatTimeout(
                     f"No heartbeat received for {HEARTBEAT_TIMEOUT} seconds."
                 ) from error
 
@@ -480,6 +535,7 @@ async def receive_messages(websocket_url):
                     report(
                         f"Received non-UTF-8 binary message: {raw_message!r}",
                         logging.WARNING,
+                        display,
                     )
                     continue
             else:
@@ -496,6 +552,8 @@ async def receive_messages(websocket_url):
             # Only a heartbeat resets the heartbeat deadline.
             if is_heartbeat(parsed_message):
                 last_heartbeat = time.monotonic()
+                status.last_heartbeat = last_heartbeat
+                display.status(status)
                 continue
 
             # Ignore training reports; they aren't real earthquake alerts.
@@ -533,71 +591,121 @@ async def receive_messages(websocket_url):
                 if isinstance(parsed_message, dict):
                     summary = build_eew_summary(parsed_message)
 
-                    if parsed_message.get("isFinal") is True:
-                        report(
-                            build_eew_summary(
-                                parsed_message,
-                                include_report_type=False,
-                            )
-                        )
-                    else:
-                        LOGGER.info(summary)
-
-                    show_eew_notification(parsed_message)
+                    LOGGER.info(summary)
+                    display.eew(summary, parsed_message)
+                    if meets_notification_threshold(parsed_message):
+                        if notifications is not None:
+                            notifications.submit(parsed_message)
+                        else:
+                            warning = await asyncio.to_thread(show_eew_notification, parsed_message)
+                            update_notification_status(warning, display, status)
                 else:
                     report(
-                        "Received non-object JSON message and saved it locally."
+                        "Received non-object JSON message and saved it locally.",
+                        display=display,
                     )
                 continue
 
             # Print ordinary non-JSON messages.
-            report(f"Received message: {parsed_message}")
+            report(f"Received message: {parsed_message}", display=display)
 
 
-async def run_with_reconnect():
+async def run_with_reconnect(display=None, retry_requested=None):
     """Keep the receiver alive with bounded exponential reconnect delays."""
+    display = display or ConsoleDisplay()
+    retry_requested = retry_requested or asyncio.Event()
+    status = ConnectionStatus()
+
+    def notification_status(warning):
+        update_notification_status(warning, display, status)
+
+    async with NotificationQueue(show_eew_notification, notification_status, LOGGER) as notifications:
+        await reconnect_loop(display, retry_requested, status, notifications)
+
+
+async def reconnect_loop(display, retry_requested, status, notifications):
+    """Reconnect independently of desktop notification delivery."""
     reconnect_delay = RECONNECT_INITIAL_DELAY
 
     while True:
-        attempt_started = time.monotonic()
+        status.phase = "connecting"
+        status.connected_at = None
+        status.last_heartbeat = None
+        display.status(status)
 
         try:
-            await receive_messages(WEBSOCKET_URL)
+            await receive_messages(WEBSOCKET_URL, display, status, notifications)
         except Exception as error:
-            connected_duration = time.monotonic() - attempt_started
-            if connected_duration >= HEARTBEAT_TIMEOUT:
-                reconnect_delay = RECONNECT_INITIAL_DELAY
-
-            LOGGER.exception("WebSocket receiver stopped unexpectedly.")
-            report(
-                f"Connection lost: {error}. "
-                f"Reconnecting in {reconnect_delay} seconds...",
-                logging.WARNING,
-            )
+            # Expected network failures don't need a traceback on every retry.
+            if isinstance(error, (OSError, WebSocketException, asyncio.TimeoutError)):
+                status.detail = f"{type(error).__name__}: {error}"
+            else:
+                LOGGER.exception("WebSocket receiver stopped unexpectedly.")
+                status.detail = f"Receiver error {type(error).__name__}: {error}"
         else:
-            report(
-                f"Connection closed. "
-                f"Reconnecting in {reconnect_delay} seconds...",
-                logging.WARNING,
-            )
+            status.detail = "Server closed the connection"
 
-        await asyncio.sleep(reconnect_delay)
+        # Measure the actual established session, not time spent connecting.
+        if (
+            status.connected_at is not None
+            and time.monotonic() - status.connected_at >= HEARTBEAT_TIMEOUT
+        ):
+            reconnect_delay = RECONNECT_INITIAL_DELAY
+            status.attempt = 0
+
+        status.attempt += 1
+        status.phase = "retrying"
+        status.detail = " ".join(status.detail.split())
+        status.retry_at = time.monotonic() + reconnect_delay
+        LOGGER.warning("%s. Reconnecting in %s seconds (failure %s).",
+                       status.detail, reconnect_delay, status.attempt)
+        retry_requested.clear()
+        display.status(status)
+
+        try:
+            await asyncio.wait_for(retry_requested.wait(), timeout=reconnect_delay)
+        except asyncio.TimeoutError:
+            pass
         reconnect_delay = min(
             reconnect_delay * 2,
             RECONNECT_MAX_DELAY,
         )
 
 
-async def main():
+async def main(argv=None):
+    # Internal entrypoint used when a console build is packaged as one executable.
+    if "--service-run" in (sys.argv[1:] if argv is None else argv):
+        from eew_service import main as service_main
+
+        arguments = list(sys.argv[1:] if argv is None else argv)
+        arguments.remove("--service-run")
+        return await service_main(["run", *arguments])
+    parser = argparse.ArgumentParser(description="Wolfx / JMA EEW real-time monitor")
+    parser.add_argument("--plain", action="store_true", help="plain-text mode (automatic when output is redirected)")
+    parser.add_argument("--tui", action="store_true", help="force the interactive terminal interface")
+    args = parser.parse_args(argv)
+    if args.plain and args.tui:
+        parser.error("--plain and --tui cannot be used together")
     if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    await run_with_reconnect()
+    interactive = all(stream is not None and stream.isatty()
+                      for stream in (sys.stdin, sys.stdout))
+    if args.tui or (interactive and not args.plain):
+        from eew_tui import EEWApp
+        from eew_runtime import watch_service
+
+        await EEWApp(watch_service).run_async()
+    else:
+        from eew_runtime import watch_service
+
+        await watch_service(ConsoleDisplay(), asyncio.Event())
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        report("Terminated.")
-
+        pass
+    finally:
+        LOGGER.info("Terminated.")
