@@ -3,17 +3,21 @@
 
 This is an [EEW](https://en.wikipedia.org/wiki/Earthquake_Early_Warning_(Japan)) (Earthquake Early Warning) software that pops warning info on your desktop (Windows) once an EEW message announces.
 
-## Functions
+## Features
 
-- Receives EEW updates with WebSocket
-  - Currently from [JMA](https://www.data.jma.go.jp/multi/quake/index.html) (Japan Meteorological Agency, 気象庁) only (credit to [Wolfx API](https://wolfx.jp/apidoc_en)).
-  - Planning to support: [CENC](https://data.earthquake.cn/) (China Earthquake Networks Center, 国家地震科学数据中心) and more.
-- Once received alert updates
-  - Record files in json format, same file will be updated if the alert has been updated;
-  - Short info messages printed in the terminal;
-  - Pop-up window at the corner on Windows system.
+- Receiver (service): 
+  - Receives EEW updates with WebSocket, using the Wolfx source.
+    - Currently supoorts [JMA](https://www.data.jma.go.jp/multi/quake/index.html) (Japan Meteorological Agency, 気象庁) only (credit to [Wolfx API](https://wolfx.jp/apidoc_en)).
+    - Plan to support: [CENC](https://data.earthquake.cn/) (China Earthquake Networks Center, 国家地震科学数据中心) and more.
+  - Once received alert messages:
+    - Record files in json format, same file will be updated if the alert has been updated;
+    - Pop-up window at the corner on desktop.
+- Interactive TUI:
+  - Structural info messages display and updates as a table;
+  - Both history and live messages;
+  - Changeable themes and color schemes (will be added a bit later).
 - Compatibility
-  - Expected to work both on Windows and Linux 
+  - Supposed to work on both Windows and Linux.
 
 
 ## Requirements
