@@ -1,11 +1,11 @@
 # EEW Monitor
-> This software was built assisted with gpt-5.6-sol / gpt-6-astra using Codex.
+> This software was built assisted with `gpt-5.6-sol`/`gpt-6-astra` using Codex.
 
-This is an [EEW](https://en.wikipedia.org/wiki/Earthquake_Early_Warning_(Japan)) (Earthquake Early Warning) software that pops warning info on your desktop (Windows) once an EEW message announces.
+This is an [EEW](https://en.wikipedia.org/wiki/Earthquake_Early_Warning_(Japan)) (Earthquake Early Warning) software that pops warning info on your desktop & records them once an EEW message announces.
 
 ## Features
 
-- Receiver (service): 
+- **Receiver** (service)
   - Receives EEW updates in the background (with WebSocket)
     - Currently supoorts [JMA](https://www.data.jma.go.jp/multi/quake/index.html) (Japan Meteorological Agency, 気象庁) only (credit to [Wolfx API](https://wolfx.jp/apidoc_en));
     - Plan to support: [CENC](https://data.earthquake.cn/) (China Earthquake Networks Center, 国家地震科学数据中心) and more.
@@ -13,11 +13,11 @@ This is an [EEW](https://en.wikipedia.org/wiki/Earthquake_Early_Warning_(Japan))
     - Record files in json format, same file will be updated if the alert has been updated;
     - Pop-up window at the corner on desktop.
   - Quitting TUI does not stop the receiver.
-- Interactive TUI:
+- **Interactive TUI**
   - Structural info messages display and updates as a table;
   - Both history and live messages;
   - Changeable themes and color schemes (will be added a bit later).
-- Compatibility
+- **Compatibility**
   - Supposed to work on both Windows and Linux.
 
 
@@ -86,4 +86,9 @@ Earthquake with maximum intensity `>= 4` or magnitude `>= 5.0` would be alerted 
 - [ ] Data:
   - [x] 1st phase: JMA (Japan)
   - [ ] 2nd phase: CENC (China), etc.
-- [ ] Maybe future: Icon, sound, ASCII diagram in TUI, etc.
+- [ ] Maybe future: 
+  - [ ] Add an icon;
+  - [ ] Add sound? 
+  - [ ] Add an ASCII diagram in TUI (maybe add a diagram displayed in TUI - detailed info - to show the approx place);
+  - [ ] Changeable color themes (WIP)
+  - [ ] ...
