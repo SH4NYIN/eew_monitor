@@ -6,12 +6,13 @@ This is an [EEW](https://en.wikipedia.org/wiki/Earthquake_Early_Warning_(Japan))
 ## Features
 
 - Receiver (service): 
-  - Receives EEW updates with WebSocket, using the Wolfx source.
-    - Currently supoorts [JMA](https://www.data.jma.go.jp/multi/quake/index.html) (Japan Meteorological Agency, 気象庁) only (credit to [Wolfx API](https://wolfx.jp/apidoc_en)).
+  - Receives EEW updates in the background (with WebSocket)
+    - Currently supoorts [JMA](https://www.data.jma.go.jp/multi/quake/index.html) (Japan Meteorological Agency, 気象庁) only (credit to [Wolfx API](https://wolfx.jp/apidoc_en));
     - Plan to support: [CENC](https://data.earthquake.cn/) (China Earthquake Networks Center, 国家地震科学数据中心) and more.
   - Once received alert messages:
     - Record files in json format, same file will be updated if the alert has been updated;
     - Pop-up window at the corner on desktop.
+  - Quitting TUI does not stop the receiver.
 - Interactive TUI:
   - Structural info messages display and updates as a table;
   - Both history and live messages;
