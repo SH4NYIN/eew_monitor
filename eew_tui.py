@@ -15,31 +15,23 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Header, Static
 
 from eew_display import ConnectionStatus
-from eew_intensity import normalize_intensity
+from eew_themes import DEFAULT_THEME, INTENSITY_CODES, get_theme
 
 
-LOW_INTENSITY_COLOR = "#a3a8b0"
-UNKNOWN_INTENSITY_COLOR = "#9aa0a6"
-# JQuake-inspired warm progression, adjusted for legibility on dark terminals.
-# These are display categories, not magnitude or instrumental intensity ranges.
-INTENSITY_COLORS = {
-    "0": LOW_INTENSITY_COLOR,
-    "1": LOW_INTENSITY_COLOR,
-    "2": LOW_INTENSITY_COLOR,
-    "3": LOW_INTENSITY_COLOR,
-    "4": "#ffe066",
-    "5-": "#ffaa00",
-    "5+": "#ff7043",
-    "6-": "#ff4040",
-    "6+": "#ff66aa",
-    "7": "#c77dff",
-}
+INTENSITY_COLORS = get_theme().colors
+UNKNOWN_INTENSITY_COLOR = get_theme().unknown
 
 
-def intensity_color(value):
+def intensity_color(value, theme=DEFAULT_THEME):
     """Accept JMA Japanese/Chinese labels, +/- codes and full-width variants."""
-    code = normalize_intensity(value)
-    return INTENSITY_COLORS.get(code, UNKNOWN_INTENSITY_COLOR)
+    return get_theme(theme).color(value)
+
+
+def intensity_style(value, theme=DEFAULT_THEME):
+    palette = get_theme(theme)
+    if palette.badges:
+        return Style(color=palette.foreground(value), bgcolor=palette.color(value), bold=True)
+    return Style(color=palette.color(value))
 
 
 # key, heading, proportional weight, minimum terminal-cell width.
@@ -91,6 +83,7 @@ class EventRecord:
     message: dict
     historical: bool
     received_at: str
+    theme: str = DEFAULT_THEME
 
     def fields(self):
         message = self.message
@@ -123,14 +116,24 @@ class EventRecord:
 
     @property
     def style(self):
-        return Style(color=intensity_color(self.message.get("MaxIntensity")),
+        palette = get_theme(self.theme)
+        return Style(color=palette.color(self.message.get("MaxIntensity")) if palette.colored_rows else palette.row_foreground,
                      bold=self.message.get("isFinal") is True or self.message.get("isCancel") is True)
+
+    @property
+    def intensity_style(self):
+        return self.style + intensity_style(self.message.get("MaxIntensity"), self.theme)
 
     def cells(self):
         fields = self.fields()
         cells = []
         for key, _, _, _ in COLUMNS:
             text = Text(fields[key], style=self.style, no_wrap=True, overflow="ellipsis")
+            if key == "intensity":
+                text.style = self.intensity_style
+                if get_theme(self.theme).badges:
+                    text = Text(f" {fields[key]} ", style=self.intensity_style,
+                                no_wrap=True, overflow="ellipsis")
             if key == "state" and self.message.get("isCancel") is True:
                 text.stylize("bold reverse")
             cells.append(text)
@@ -142,8 +145,13 @@ class EventRecord:
         table = Table.grid(expand=True, padding=(0, 1))
         for ratio in (5, 3, 2):
             table.add_column(ratio=ratio, overflow="fold")
+        intensity = Text(f"M {fields['magnitude']}    Int. ", style=self.style)
+        if get_theme(self.theme).badges:
+            intensity.append(f" {fields['intensity']} ", style=self.intensity_style)
+        else:
+            intensity.append(fields["intensity"])
         table.add_row(Text(fields["place"], style=self.style),
-                      Text(f"M {fields['magnitude']}    Int. {fields['intensity']}", style=self.style),
+                      intensity,
                       Text(f"{fields['state']}  #{fields['serial']}", style=self.style))
         table.add_row(Text(fields["origin"]), Text(f"Depth {fields['depth']}"), Text(fields["source"]))
         return table
@@ -163,25 +171,39 @@ class EventDetails(ModalScreen):
         self.record = record
 
     def compose(self):
+        with VerticalScroll():
+            yield Static(self.details_table(), id="event-details-content")
+
+    def details_table(self):
         table = Table.grid(expand=True, padding=(0, 1))
         table.add_column(width=12)
         table.add_column(ratio=1, overflow="fold")
         fields = self.record.fields()
         for key, heading, _, _ in COLUMNS:
-            table.add_row(Text(heading), Text(fields[key], style=self.record.style))
+            style = self.record.intensity_style if key == "intensity" else self.record.style
+            value = fields[key]
+            if key == "intensity" and get_theme(self.record.theme).badges:
+                value = f" {value} "
+            table.add_row(Text(heading), Text(value, style=style))
         table.add_row("EventID", Text(field_text(self.record.message.get("EventID"))))
         table.add_row("Received", Text(self.record.received_at or "HIS · No receipt time in this session"))
         table.add_row("", "Esc / Enter to return")
-        with VerticalScroll():
-            yield Static(table)
+        return table
+
+    def set_intensity_theme(self, theme):
+        self.record.theme = theme
+        self.query_one("#event-details-content", Static).update(self.details_table())
 
 
-def intensity_legend():
-    text = Text("Intensity  ")
-    for label, code in (("<4", "3"), ("4", "4"), ("5-", "5-"),
-                        ("5+", "5+"), ("6-", "6-"), ("6+", "6+"), ("7", "7")):
-        text.append(label + "  ", style=INTENSITY_COLORS[code])
-    text.append("?", style=UNKNOWN_INTENSITY_COLOR)
+def intensity_legend(theme=DEFAULT_THEME):
+    palette = get_theme(theme)
+    text = Text("Intensity  " if palette.colored_rows else f"Intensity · {palette.label}  ", no_wrap=True)
+    for code in (*INTENSITY_CODES, "?"):
+        if palette.badges:
+            text.append(f" {code} ", style=intensity_style(code, theme))
+            text.append(" ")
+        else:
+            text.append(code + ("  " if code != "?" else ""), style=intensity_style(code, theme))
     return text
 
 
@@ -230,8 +252,9 @@ class EEWApp(App):
         Binding("end", "follow", "Latest", show=False, priority=True),
     ]
 
-    def __init__(self, monitor, history_loader=None):
+    def __init__(self, monitor, history_loader=None, *, intensity_theme=DEFAULT_THEME):
         super().__init__()
+        self.intensity_theme = get_theme(intensity_theme).key
         self.monitor = monitor
         self.history_loader = history_loader
         self.connection = ConnectionStatus()
@@ -250,9 +273,10 @@ class EEWApp(App):
         yield Static(id="connection", markup=False)
         yield Static("No reports yet. Waiting for earthquake information.", id="latest", markup=False)
         yield EventTable(id="events", show_row_labels=False, cursor_type="row",
-                         cursor_foreground_priority="renderable", zebra_stripes=True)
+                         cursor_foreground_priority="renderable", cursor_background_priority="renderable",
+                         zebra_stripes=True)
         yield Static(id="notice", markup=False)
-        yield Static(intensity_legend(), id="intensity-legend")
+        yield Static(intensity_legend(self.intensity_theme), id="intensity-legend")
         yield Static(id="view-status", markup=False)
         yield Footer()
 
@@ -313,7 +337,8 @@ class EEWApp(App):
             key = f"anonymous:{self.anonymous_sequence}"
         record = EventRecord(dict(message), historical,
                              received_at if received_at is not None else (
-                                 "" if historical else datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                                 "" if historical else datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                             theme=self.intensity_theme)
         table = self.query_one(EventTable)
         exists = key in self.records
         self.records[key] = record
@@ -331,6 +356,24 @@ class EEWApp(App):
         if not historical and not self.following:
             self.unseen += 1
         self.update_view_status()
+
+    def set_intensity_theme(self, key):
+        """Repaint existing content without replacing rows, moving the cursor or notifying."""
+        self.intensity_theme = get_theme(key).key
+        if not self.ready:
+            return
+        screen = self.screen_stack[0]
+        table = screen.query_one(EventTable)
+        for event_key, record in self.records.items():
+            record.theme = key
+            for column, cell in zip(COLUMNS, record.cells()):
+                table.update_cell(event_key, column[0], cell)
+        screen.query_one("#intensity-legend", Static).update(intensity_legend(key))
+        if self.latest_key in self.records:
+            screen.query_one("#latest", Static).update(self.records[self.latest_key].overview())
+        for detail in self.screen_stack:
+            if isinstance(detail, EventDetails):
+                detail.set_intensity_theme(key)
 
     def trim_events(self):
         table = self.query_one(EventTable)
