@@ -54,6 +54,10 @@ python -m pip install -r requirements.txt
   python eew_service.py stop
   ```
 
+- Keep Monitor when Start Up (Windows)
+
+  Use `win + R` and type in `shell:startup` to open the startup folder. Then simply add the shortcut (`.lnk`) of `eew_background.pyw`.
+
 ## Misc
 
 ### Color 
