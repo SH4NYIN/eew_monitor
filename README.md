@@ -3,6 +3,10 @@
 
 This is an [EEW](https://en.wikipedia.org/wiki/Earthquake_Early_Warning_(Japan)) (Earthquake Early Warning) software that pops warning info on your desktop & records them once an EEW message announces.
 
+![screenshot](./assets/screenshot.png)
+
+
+
 ## Features
 
 - **Receiver** (service)
@@ -62,18 +66,21 @@ python -m pip install -r requirements.txt
 
 ### Color 
 
-Colors reflect the maximum intensity (Shindo, based on JMA's system) and I referred [JQuake](https://jquake.net/)'s color scheme. The table here shows the default color config. It cannot be changed for now.
+Colors reflect the maximum intensity (Shindo, based on JMA's system) and I referred [JQuake](https://jquake.net/)'s color scheme. The default color scheme is set to `MUTED (Soft)`.
 
-| Intensity      | Color                                       |
-| -------------- | ------------------------------------------- |
-| 0–3            | Light gray (`#a3a8b0`)                      |
-| 4              | Yellow                                      |
-| 5 lower (`5-`) | Orange                                      |
-| 5 upper (`5+`) | Orange-red                                  |
-| 6 lower (`6-`) | Red                                         |
-| 6 upper (`6+`) | Pink                                        |
-| 7              | Purple                                      |
-| Unknown        | Neutral gray                                |
+| Intensity | JQUAKE                 | MUTED (Soft)             |
+| --------- | ---------------------- | ------------------------ |
+| 0         | `#3c3c3c`              | Light Gray (`#a3a8b0`)   |
+| 1         | Light Gray (`#6e7878`) | Soft Gray (`#b2b5cc`)    |
+| 2         | Blue (`#1e6ef0`)       | Blue-Gray (`#96b7d8`)    |
+| 3         | Green (`#32b464`)      | Light Green (`#9fc4aa`)  |
+| 4         | Yellow (`#ffe05d`)     | Yellow (`#ffe066`)       |
+| 5-        | Orange (`#ffaa00`)     | Orange (`#ffaa00`)       |
+| 5+        | Orange-Red (`#fa7800`) | Orange-Red (`#ff7043`)   |
+| 6-        | Red (`#f00000`)        | Red (`#ff4040`)          |
+| 6+        | Dark-Red (`#a00000`)   | Pink (`#ff66aa`)         |
+| 7         | Purple (`#800080`)     | Purple (`#c77dff`)       |
+| Unknown   | --                     | Neutral Gray (`#9aa0a6`) |
 
 ### Threshold
 
@@ -94,5 +101,5 @@ Earthquake with maximum intensity `>= 4` or magnitude `>= 5.0` would be alerted 
   - [ ] Add an icon;
   - [ ] Add sound? 
   - [ ] Add an ASCII diagram in TUI (maybe add a diagram displayed in TUI - detailed info - to show the approx place);
-  - [ ] Changeable color themes (WIP)
+  - [x] Changeable color themes (WIP)
   - [ ] ...
